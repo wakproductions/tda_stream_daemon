@@ -5,7 +5,7 @@ require 'tda_stream_daemon/version'
 
 Gem::Specification.new do |spec|
   spec.name          = "tda_stream_daemon"
-  spec.version       = TdaStreamDaemon::VERSION
+  spec.version       = TDAStreamDaemon::VERSION
   spec.authors       = ["Winston Kotzan"]
   spec.email         = ["wak@wakproductions.com"]
   spec.summary       = %q{An alerts system which uses the TD Ameritrade Stream API}
