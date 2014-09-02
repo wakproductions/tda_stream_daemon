@@ -176,7 +176,7 @@ module TDAStreamDaemon
     def download_average_true_range_calibration(to_calibrate_date)
       return if to_calibrate_date == last_calibration_date
 
-      filename = File.join(Dir.pwd, 'run', 'atrs.txt')
+      filename = File.join(Dir.pwd, 'cache', 'atrs.txt')
       puts "Getting calibration data for true range moving average - #{to_calibrate_date}"
       i = 0
       f = open(filename, 'w')
@@ -327,7 +327,7 @@ module TDAStreamDaemon
     end
 
     def symbols_from_watchlist
-      wl_file = File.join(Dir.pwd, 'run', 'watchlist.txt')
+      wl_file = File.join(Dir.pwd, 'cache', 'watchlist.txt')
       f = File.open(wl_file, 'r')
       list = f.read().split("\n")
       f.close
