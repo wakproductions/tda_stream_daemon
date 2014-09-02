@@ -162,7 +162,7 @@ module TDAStreamDaemon
     end
 
     def last_calibration_date
-      wl_file = File.join(Dir.pwd, 'run', 'atrs.txt')
+      wl_file = File.join(Dir.pwd, 'cache', 'atrs.txt')
       f = File.open(wl_file, 'r')
       lines = f.read().split("\n")
       f.close
@@ -174,17 +174,15 @@ module TDAStreamDaemon
     end
 
     def download_average_true_range_calibration(to_calibrate_date)
-      return if to_calibrate_date == last_calibration_date
-
       filename = File.join(Dir.pwd, 'cache', 'atrs.txt')
       puts "Getting calibration data for true range moving average - #{to_calibrate_date}"
       i = 0
       f = open(filename, 'w')
       f.write("#{to_calibrate_date}\n")
       symbols_from_watchlist.each do |symbol|
-        end_date = to_calibrate_date - 1
+        end_date = to_calibrate_date
         begin
-          prices = @tda_client.get_price_history(symbol, intervaltype: :minute, intervalduration: 5, periodtype: :day, period: 1, enddate: end_date).pop(61)
+          prices = @tda_client.get_price_history(symbol, intervaltype: :minute, intervalduration: 5, periodtype: :day, period: 2, enddate: end_date).pop(61)
           #average_true_range = calculate_average_true_range(prices)
           # build the stack of true ranges
           #true_range_stack = prices.each_cons(2).to_a.map { |p| calculate_true_range(p[0], p[1]) }.inject { |trs, tr| trs + ',' + tr }.to_f
@@ -203,7 +201,7 @@ module TDAStreamDaemon
     def calibrate_average_true_range(to_calibrate_date)
       download_average_true_range_calibration(to_calibrate_date)
 
-      wl_file = File.join(Dir.pwd, 'run', 'atrs.txt')
+      wl_file = File.join(Dir.pwd, 'cache', 'atrs.txt')
       f = File.open(wl_file, 'r')
       lines = f.read().split("\n")
       f.close
@@ -327,7 +325,7 @@ module TDAStreamDaemon
     end
 
     def symbols_from_watchlist
-      wl_file = File.join(Dir.pwd, 'cache', 'watchlist.txt')
+      wl_file = File.join(Dir.pwd, 'run', 'watchlist.txt')
       f = File.open(wl_file, 'r')
       list = f.read().split("\n")
       f.close
