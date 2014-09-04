@@ -120,7 +120,12 @@ module TDAStreamDaemon
 
     private
     def update_average_true_range
-      @average_true_range = @candle_stack.each_cons(2).to_a.map { |candle_pair| calculate_true_range(candle_pair[0], candle_pair[1]) }.inject { |sum, n| sum + n } / @candle_stack.length
+      begin
+        @average_true_range = @candle_stack.each_cons(2).to_a.map { |candle_pair| calculate_true_range(candle_pair[0], candle_pair[1]) }.inject { |sum, n| sum + n } / @candle_stack.length
+      rescue
+        #TODO there seems to be a bug where this crashes if you start the daemon at around 930 am when the market is fast
+        puts "Error calculating average true range"
+      end
     end
 
   end
@@ -183,12 +188,7 @@ module TDAStreamDaemon
         end_date = to_calibrate_date
         begin
           prices = @tda_client.get_price_history(symbol, intervaltype: :minute, intervalduration: 5, periodtype: :day, period: 2, enddate: end_date).pop(61)
-          #average_true_range = calculate_average_true_range(prices)
-          # build the stack of true ranges
-          #true_range_stack = prices.each_cons(2).to_a.map { |p| calculate_true_range(p[0], p[1]) }.inject { |trs, tr| trs + ',' + tr }.to_f
-
           candle_stack = prices.map { |p| "#{p[:high]},#{p[:low]},#{p[:close]}" }.join(';')
-          #puts "#{symbol} #{candle_stack}"
           f.write("#{symbol}:#{candle_stack}\n")
         rescue
           puts "Skipping symbol #{symbol}"
@@ -198,8 +198,8 @@ module TDAStreamDaemon
       f.close
     end
 
-    def calibrate_average_true_range(to_calibrate_date)
-      download_average_true_range_calibration(to_calibrate_date)
+    def calibrate_average_true_range(to_calibrate_date, opt={})
+      download_average_true_range_calibration(to_calibrate_date) if opt[:skip_calibration_download] != true
 
       wl_file = File.join(Dir.pwd, 'cache', 'atrs.txt')
       f = File.open(wl_file, 'r')
@@ -223,12 +223,10 @@ module TDAStreamDaemon
       # opt[:stream_date] will be the day that the stream is supposed to be happening (default is today)
       # stream.symbols will be the watchlist of 5min charts we need to pull up
 
-      save_atrs = true
       symbols = symbols_from_watchlist
       calibration_date = opt[:stream_date] || Date.new(2014,8,12)
-      calibrate_average_true_range(calibration_date)
-
-
+      stop_time = opt[:stop_time]
+      calibrate_average_true_range(calibration_date, opt)
       i = 1
 
       while true
@@ -251,10 +249,16 @@ module TDAStreamDaemon
             time = data.columns[:tradetime] || data.columns[:quotetime]
             next if time.nil?
             next if time < @watchlist[symbol].current_candle.time
-            puts "Processing current time #{calculate_time_bucket(time)}" if i % 10000 == 0
+            time_bucket = calculate_time_bucket(time)
+            puts "Processing current time #{time_bucket}" if i % 10000 == 0
+            if stop_time && (time_bucket >= stop_time + 5)
+              puts "Stopping stream per scheduled stop time: #{stop_time}"
+              stream.quit
+              return
+            end
 
 
-            if calculate_time_bucket(time) > @watchlist[symbol].current_candle.time_bucket && data.columns[:last]
+            if time_bucket > @watchlist[symbol].current_candle.time_bucket && data.columns[:last]
               #the time bucket on the currently received data is greater than the current candle; we have a new currentcandle
               new_candle = Candle.new
               new_candle.close = data.columns[:last]
@@ -264,7 +268,7 @@ module TDAStreamDaemon
               new_candle.time = time
 
               @watchlist[symbol].replace_current_candle(new_candle)
-            elsif calculate_time_bucket(time) == @watchlist[symbol].current_candle.time_bucket && data.columns[:last]
+            elsif time_bucket == @watchlist[symbol].current_candle.time_bucket && data.columns[:last]
               #the time bucket on the currently received data is the same than the current candle; update the current candle
               # note that we ignore any instances where the timestamp on the new data is LESS than the current candle's time bucket
               current_candle = @watchlist[symbol].current_candle
@@ -279,7 +283,7 @@ module TDAStreamDaemon
               @watchlist[symbol].update_current_candle(new_candle)
             end
 
-            do_alert(symbol, calculate_time_bucket(time), after_hours_ok: @watchlist[symbol].afterhours_alert_ok?, last: data.columns[:last], volume: data.columns[:volume], true_range: @watchlist[symbol].true_range, avg_true_range_5: @watchlist[symbol].average_true_range * 5) if @watchlist[symbol].true_range > (@watchlist[symbol].average_true_range * 5)
+            do_alert(symbol, time_bucket, after_hours_ok: @watchlist[symbol].afterhours_alert_ok?, last: data.columns[:last], volume: data.columns[:volume], true_range: @watchlist[symbol].true_range, avg_true_range_5: @watchlist[symbol].average_true_range * 5) if @watchlist[symbol].true_range > (@watchlist[symbol].average_true_range * 5)
             #puts "#{i} + #{data.columns} + #{@watchlist[symbol].current_candle.time_bucket} #{@watchlist[symbol].true_range.round(4)} / #{(@watchlist[symbol].average_true_range * 5).round(4)}"
             i += 1
           end
