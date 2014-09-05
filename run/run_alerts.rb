@@ -7,7 +7,7 @@ require 'rufus-scheduler'
 
 # set it up so that if starting in the middle of the day it calibrates the morning
 run_mock = false
-run_schedule = true
+run_schedule = false
 
 if run_mock
   Dir[File.join(Dir.pwd, 'run', 'test_data', '*20140813-012.binary')].each do |f|
@@ -35,6 +35,7 @@ else
 
     while 1
       # prevent the program from ending so that the scheduler can run indefinitely
+      sleep 100
     end
 
   else

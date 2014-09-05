@@ -157,10 +157,11 @@ module TDAStreamDaemon
     include Calculations
 
     attr_accessor :alerts
-    attr_reader :watchlist  # mainly for debug purposes
+    attr_reader :watchlist, :watchlist_exclusions  # mainly for debug purposes
 
     def initialize
       @watchlist = SymbolDataStoreList.new # A hash of each symbol we are watching. Value column will be a hash of the data associated
+      @watchlist_exclusions = Array.new
       @alerts = Hash.new # symbol, with the time of the alert
       @tda_client = TDAmeritradeApi::Client.new
       raise Exception.new("Unable to connect to TD Ameritrade API") if !@tda_client.login
@@ -188,10 +189,14 @@ module TDAStreamDaemon
         end_date = to_calibrate_date
         begin
           prices = @tda_client.get_price_history(symbol, intervaltype: :minute, intervalduration: 5, periodtype: :day, period: 2, enddate: end_date).pop(61)
+          if prices.count < 61
+            puts "Skipping symbol #{symbol} - too few candles returned"
+            next
+          end
           candle_stack = prices.map { |p| "#{p[:high]},#{p[:low]},#{p[:close]}" }.join(';')
           f.write("#{symbol}:#{candle_stack}\n")
         rescue
-          puts "Skipping symbol #{symbol}"
+          puts "Skipping symbol #{symbol} - error retrieving data"
         end
       end
 
@@ -227,6 +232,7 @@ module TDAStreamDaemon
       calibration_date = opt[:stream_date] || Date.new(2014,8,12)
       stop_time = opt[:stop_time]
       calibrate_average_true_range(calibration_date, opt)
+      symbols = symbols.select { |s| !@watchlist[s].nil? }
       i = 1
 
       while true
