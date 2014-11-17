@@ -61,7 +61,7 @@ module TDAStreamDaemon
 
   class SymbolDataStore
     include Calculations
-    attr_accessor :symbol, :candle_stack, :average_true_range, :alert_triggered_time
+    attr_accessor :symbol, :average_true_range, :alert_triggered_time, :close_price
 
     def initialize(symbol)
       @symbol = symbol.to_sym
@@ -77,6 +77,17 @@ module TDAStreamDaemon
       @candle_stack << value
     end
 
+    def candle_stack
+      @candle_stack
+    end
+
+    def candle_stack=(value)
+      @candle_stack=value
+
+      # set the after hours close
+      @close_price = @candle_stack.inject(@candle_stack.first) { |last_candle, current_candle| current_candle.time_bucket == 1600 ? current_candle : last_candle }.close
+    end
+
     def previous_candle
       @candle_stack[-2]
     end
@@ -86,6 +97,7 @@ module TDAStreamDaemon
       @candle_stack.shift
       @candle_stack << new_candle
       update_average_true_range
+      @close_price = new_candle.close if new_candle.time_bucket == 1600
 
       if self.afterhours_starting_volume==0 && new_candle.time_bucket>1605 && new_candle.volume
         @afterhours_starting_volume = new_candle.volume
@@ -96,6 +108,7 @@ module TDAStreamDaemon
       new_candle.true_range = calculate_true_range(@candle_stack.last, new_candle)
       @candle_stack[-1] = new_candle
       update_average_true_range
+      @close_price = new_candle.close if new_candle.time_bucket == 1600
     end
 
     def true_range
@@ -120,12 +133,7 @@ module TDAStreamDaemon
 
     private
     def update_average_true_range
-      begin
-        @average_true_range = @candle_stack.each_cons(2).to_a.map { |candle_pair| calculate_true_range(candle_pair[0], candle_pair[1]) }.inject { |sum, n| sum + n } / @candle_stack.length
-      rescue
-        #TODO there seems to be a bug where this crashes if you start the daemon at around 930 am when the market is fast
-        puts "Error calculating average true range"
-      end
+      @average_true_range = @candle_stack.each_cons(2).to_a.map { |candle_pair| calculate_true_range(candle_pair[0], candle_pair[1]) }.inject { |sum, n| sum + n } / @candle_stack.length
     end
 
   end
@@ -187,16 +195,23 @@ module TDAStreamDaemon
       f.write("#{to_calibrate_date}\n")
       symbols_from_watchlist.each do |symbol|
         end_date = to_calibrate_date
-        begin
-          prices = @tda_client.get_price_history(symbol, intervaltype: :minute, intervalduration: 5, periodtype: :day, period: 2, enddate: end_date).pop(61)
-          if prices.count < 61
-            puts "Skipping symbol #{symbol} - too few candles returned"
-            next
+
+        attempt = 0
+        while attempt < 3
+          begin
+            prices = @tda_client.get_price_history(symbol, intervaltype: :minute, intervalduration: 5, periodtype: :day, period: 3, enddate: end_date, extended: true).pop(61)
+            if prices.count < 61
+              puts "Skipping symbol #{symbol} - too few candles returned"
+              attempt = 3
+              next
+            end
+            candle_stack = prices.map { |p| "#{p[:high]},#{p[:low]},#{p[:close]}" }.join(';')
+            f.write("#{symbol}:#{candle_stack}\n")
+            attempt = 3
+          rescue
+            attempt += 1
+            puts "Error retrieving data on #{symbol} (attempt ##{attempt})"
           end
-          candle_stack = prices.map { |p| "#{p[:high]},#{p[:low]},#{p[:close]}" }.join(';')
-          f.write("#{symbol}:#{candle_stack}\n")
-        rescue
-          puts "Skipping symbol #{symbol} - error retrieving data"
         end
       end
 
@@ -289,7 +304,19 @@ module TDAStreamDaemon
               @watchlist[symbol].update_current_candle(new_candle)
             end
 
-            do_alert(symbol, time_bucket, after_hours_ok: @watchlist[symbol].afterhours_alert_ok?, last: data.columns[:last], volume: data.columns[:volume], true_range: @watchlist[symbol].true_range, avg_true_range_5: @watchlist[symbol].average_true_range * 5) if @watchlist[symbol].true_range > (@watchlist[symbol].average_true_range * 5)
+            time_number = Time.at(time).utc.strftime("%k%M").to_i
+            if time_number > 950 && time_number < 1600
+              # For normal market hours I want to use the average true range to trigger and alert
+              if @watchlist[symbol].true_range > (@watchlist[symbol].average_true_range * 5)
+                do_alert(symbol, time_bucket, time: time_number, after_hours_ok: true, last: data.columns[:last], volume: data.columns[:volume], true_range: @watchlist[symbol].true_range, avg_true_range_5: @watchlist[symbol].average_true_range * 5)
+              end
+            elsif time_number >= 1604 && time_number < 2000
+              # For after market hours I want to use % change > 5% as an alert trigger
+              if !@watchlist[symbol].close_price.nil? && ((@watchlist[symbol].current_candle.close / @watchlist[symbol].close_price) - 1).abs >  0.05
+                do_alert(symbol, time_bucket, time: time_number, after_hours_ok: @watchlist[symbol].afterhours_alert_ok?, last: data.columns[:last], volume: data.columns[:volume], true_range: @watchlist[symbol].true_range, avg_true_range_5: @watchlist[symbol].average_true_range * 5)
+              end
+            end
+
             #puts "#{i} + #{data.columns} + #{@watchlist[symbol].current_candle.time_bucket} #{@watchlist[symbol].true_range.round(4)} / #{(@watchlist[symbol].average_true_range * 5).round(4)}"
             i += 1
           end
@@ -312,11 +339,12 @@ module TDAStreamDaemon
     private
 
     def do_alert(symbol, time, properties={})
+      #TODO move the time screening logic back to the run_daemon calling routine
       #return if time < 950 || time > 1800 || (time > 1605 && !properties[:after_hours_ok])
       return if time < 950 || time > 1800 || (time > 1600 && !properties[:after_hours_ok])
       #return if time < 1605 || (time > 1605 && !properties[:after_hours_ok])
 
-      if time - @watchlist[symbol].alert_triggered_time > 30
+      if (time - @watchlist[symbol].alert_triggered_time > 30) && (@watchlist[symbol].alert_triggered_time < 1600)
         puts "Alert on #{symbol.to_s} at #{time}: #{properties}"
         system "say 'Price action in #{symbol.to_s.bytes.map(&:chr).join('-')}'"
         @watchlist[symbol].alert_triggered_time = time

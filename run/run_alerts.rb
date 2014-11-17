@@ -10,7 +10,7 @@ run_mock = false
 run_schedule = false
 
 if run_mock
-  Dir[File.join(Dir.pwd, 'run', 'test_data', '*20140813-012.binary')].each do |f|
+  Dir[File.join(Dir.pwd, 'cache', 'test_data', '*20140813-012.binary')].each do |f|
     puts "Processing file #{f}"
     #input_file = File.join(Dir.pwd, 'run', 'test_data', 'stream_archive_20140812-01.binary')
     input_file = f
@@ -21,25 +21,33 @@ if run_mock
   end
 
 else
-  c = TDAmeritradeApi::Client.new
-  c.login
-  streamer = c.create_streamer
-  sd = TDAStreamDaemon::StreamDaemon.new
+  begin
+    c = TDAmeritradeApi::Client.new
+    c.login
+    streamer = c.create_streamer
 
-  if run_schedule
-    scheduler = Rufus::Scheduler.new
-    scheduler.cron('0 8 * * MON-FRI') do
-      puts "Starting up Alerts Daemon: #{Time.now}"
-      sd.run(streamer, stream_date: Date.today, stop_time: 1900)
+    if run_schedule
+      scheduler = Rufus::Scheduler.new
+      scheduler.cron('0 8 * * MON-FRI') do
+        puts "Starting up Alerts Daemon: #{Time.now}"
+        sd = TDAStreamDaemon::StreamDaemon.new
+        sd.run(streamer, stream_date: Date.today, stop_time: 1900)
+      end
+
+      while 1
+        # prevent the program from ending so that the scheduler can run indefinitely
+        sleep 100
+      end
+
+    else
+      sd = TDAStreamDaemon::StreamDaemon.new
+      sd.run(streamer, stream_date: Date.today)
     end
-
-    while 1
-      # prevent the program from ending so that the scheduler can run indefinitely
-      sleep 100
+  rescue Exception => e
+    if e.class != Interrupt
+      2.times { system("say 'Help me! The system has crashed!'") }
+      raise e
     end
-
-  else
-    sd.run(streamer, stream_date: Date.today)
   end
 end
 
