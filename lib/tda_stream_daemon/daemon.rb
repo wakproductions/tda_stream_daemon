@@ -14,6 +14,10 @@ module TDAStreamDaemon
     def calculate_time_bucket(seconds)
       Time.at((seconds.to_f / (5 * 60)).floor * 60 * 5 + 60 * 5).utc.strftime("%k%M").to_i
     end
+
+    def calculate_time_number(seconds)
+      Time.at(seconds).utc.strftime("%k%M").to_i
+    end
   end
 
 
@@ -260,26 +264,40 @@ module TDAStreamDaemon
             # 4. Process alert
             #   - if it meets the alert criteria, send it if it hasn't been alerted in the last 20 min
 
-            next if data.columns.nil? || data.columns[:symbol].nil?
-            next if data.columns[:last].nil? || data.columns[:volume].nil?
-            #next if data.columns[:symbol] != "KATE"
+            next if data.columns.nil? || data.columns[:symbol].nil? || data.columns[:last].nil?
             symbol = data.columns[:symbol].to_sym
             next if @watchlist[symbol].nil? # this wasn't on the watchlist so we haven't calculated an average true range for it
 
             # Need a time with this or its no good to us
-            time = data.columns[:tradetime] || data.columns[:quotetime]
-            next if time.nil?
-            next if time < @watchlist[symbol].current_candle.time
+            next if data.columns[:quotetime].nil? || (data.columns[:tradetime] && (data.columns[:tradetime] != data.columns[:quotetime]))
+            time = data.columns[:quotetime]
             time_bucket = calculate_time_bucket(time)
-            puts "Processing current time #{time_bucket}" if i % 10000 == 0
+            puts "Processing current time #{calculate_time_number(time)}, (bucket #{time_bucket}), #{Time.now}" if i % 10000 == 0
             if stop_time && (time_bucket >= stop_time + 5)
               puts "Stopping stream per scheduled stop time: #{stop_time}"
               stream.quit
               return
             end
 
+            if time_bucket == @watchlist[symbol].current_candle.time_bucket
+              #the time bucket on the currently received data is the same than the current candle; update the current candle
+              current_candle = @watchlist[symbol].current_candle
 
-            if time_bucket > @watchlist[symbol].current_candle.time_bucket && data.columns[:last]
+              # This 'if' statement here was added 2/14/15. It will now only replace the current candle if the high
+              # or low has been breached. It has reduced the processing time of 10,000 records from ~44 seconds
+              # to ~36 seconds. The "last" calculation may be slightly off now for the ATR calculation, but the
+              # difference should be negligible enough that the CPU efficiency is more important.
+              if data.columns[:last] > current_candle.high || data.columns[:last] < current_candle.low
+                new_candle = Candle.new
+                new_candle.close = data.columns[:last]
+                new_candle.high = [data.columns[:last], current_candle.high].max
+                new_candle.low = [data.columns[:last], current_candle.low].min
+                new_candle.volume = data.columns[:volume] if data.columns[:volume]
+                new_candle.time = time
+                @watchlist[symbol].update_current_candle(new_candle)
+              end
+
+            elsif time_bucket > @watchlist[symbol].current_candle.time_bucket
               #the time bucket on the currently received data is greater than the current candle; we have a new currentcandle
               new_candle = Candle.new
               new_candle.close = data.columns[:last]
@@ -289,31 +307,18 @@ module TDAStreamDaemon
               new_candle.time = time
 
               @watchlist[symbol].replace_current_candle(new_candle)
-            elsif time_bucket == @watchlist[symbol].current_candle.time_bucket && data.columns[:last]
-              #the time bucket on the currently received data is the same than the current candle; update the current candle
-              # note that we ignore any instances where the timestamp on the new data is LESS than the current candle's time bucket
-              current_candle = @watchlist[symbol].current_candle
-
-              new_candle = Candle.new
-              new_candle.close = data.columns[:last]
-              new_candle.high = [data.columns[:last], current_candle.high].max
-              new_candle.low = [data.columns[:last], current_candle.low].min
-              new_candle.volume = data.columns[:volume] if data.columns[:volume]
-              new_candle.time = time
-
-              @watchlist[symbol].update_current_candle(new_candle)
             end
 
-            time_number = Time.at(time).utc.strftime("%k%M").to_i
-            if time_number > 950 && time_number < 1600
+            #time_number = Time.at(time).utc.strftime("%k%M").to_i
+            if time_bucket > 950 && time_bucket < 1600
               # For normal market hours I want to use the average true range to trigger and alert
               if @watchlist[symbol].true_range > (@watchlist[symbol].average_true_range * 5)
-                do_alert(symbol, time_bucket, time: time_number, after_hours_ok: true, last: data.columns[:last], volume: data.columns[:volume], true_range: @watchlist[symbol].true_range, avg_true_range_5: @watchlist[symbol].average_true_range * 5)
+                do_alert(symbol, time_bucket, time: Time.at(time).utc.strftime("%k%M").to_i, after_hours_ok: true, last: data.columns[:last], volume: data.columns[:volume], true_range: @watchlist[symbol].true_range, avg_true_range_5: @watchlist[symbol].average_true_range * 5)
               end
-            elsif time_number >= 1604 && time_number < 2000
+            elsif time_bucket >= 1604 && time_bucket < 2000
               # For after market hours I want to use % change > 5% as an alert trigger
               if !@watchlist[symbol].close_price.nil? && ((@watchlist[symbol].current_candle.close / @watchlist[symbol].close_price) - 1).abs >  0.05
-                do_alert(symbol, time_bucket, time: time_number, after_hours_ok: @watchlist[symbol].afterhours_alert_ok?, last: data.columns[:last], volume: data.columns[:volume], true_range: @watchlist[symbol].true_range, avg_true_range_5: @watchlist[symbol].average_true_range * 5)
+                do_alert(symbol, time_bucket, time: Time.at(time).utc.strftime("%k%M").to_i, after_hours_ok: @watchlist[symbol].afterhours_alert_ok?, last: data.columns[:last], volume: data.columns[:volume], true_range: @watchlist[symbol].true_range, avg_true_range_5: @watchlist[symbol].average_true_range * 5)
               end
             end
 
