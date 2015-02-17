@@ -6,7 +6,7 @@ require 'rufus-scheduler'
 
 
 # set it up so that if starting in the middle of the day it calibrates the morning
-run_mock = true
+run_mock = false
 run_schedule = false
 
 if run_mock
@@ -20,7 +20,7 @@ else
     c = TDAmeritradeApi::Client.new
     c.login
     streamer = c.create_streamer
-    streamer.output_file = '/Users/wkotzan/Development/gem-development/tda_stream_daemon/cache/stream20150205.binary'
+    #streamer.output_file = '/Users/wkotzan/Development/gem-development/tda_stream_daemon/cache/stream20150205.binary'
 
     if run_schedule
       #this isn;t working so skip this feature

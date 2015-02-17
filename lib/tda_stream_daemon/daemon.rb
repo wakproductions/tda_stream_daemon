@@ -203,7 +203,7 @@ module TDAStreamDaemon
         attempt = 0
         while attempt < 3
           begin
-            prices = @tda_client.get_price_history(symbol, intervaltype: :minute, intervalduration: 5, periodtype: :day, period: 3, enddate: end_date, extended: true).pop(61)
+            prices = @tda_client.get_price_history(symbol, intervaltype: :minute, intervalduration: 5, periodtype: :day, period: 3, enddate: end_date, extended: true).first[:bars].pop(61)
             if prices.count < 61
               puts "Skipping symbol #{symbol} - too few candles returned"
               attempt = 3
